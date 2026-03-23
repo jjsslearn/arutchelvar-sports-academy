@@ -1,0 +1,182 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Document ID: {uid}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - role: string (required, enum: admin, coach)
+    //
+    // Collection: students
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required, size 1-100)
+    //   - age: number (required, 5-100)
+    //   - gender: string (required, Male/Female/Other)
+    //   - contact: string (required, size 1-20)
+    //   - joinedDate: string (required, ISO 8601)
+    //   - status: string (required, Active/Inactive)
+    //
+    // Collection: fees
+    // Document ID: auto-generated
+    // Fields:
+    //   - studentId: string (required)
+    //   - amount: number (required, positive)
+    //   - date: string (required, ISO 8601)
+    //   - month: string (required)
+    //   - year: number (required)
+    //   - status: string (required, Paid/Pending)
+    //
+    // Collection: attendance
+    // Document ID: auto-generated
+    // Fields:
+    //   - studentId: string (required)
+    //   - date: string (required, ISO 8601)
+    //   - status: string (required, Present/Absent)
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ( (request.auth.token.email == "jjsslearn@gmail.com" && request.auth.token.email_verified == true) ||
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') );
+    }
+
+    function isCoach() {
+      return isAuthenticated() &&
+        ( isAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'coach') );
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}.*");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.keys().hasOnly(['uid', 'email', 'role']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'coach'];
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasOnly(['name', 'dob', 'age', 'gender', 'contact', 'address', 'aadhaar', 'joinedDate', 'status', 'photoUrl', 'jerseyNumber', 'batch']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             isValidDateString(data.dob) &&
+             data.age is number && data.age >= 0 && data.age <= 100 &&
+             data.gender in ['Male', 'Female', 'Other'] &&
+             data.contact is string && data.contact.size() > 0 && data.contact.size() <= 20 &&
+             data.address is string && data.address.size() > 0 && data.address.size() <= 500 &&
+             data.aadhaar is string && data.aadhaar.size() == 12 &&
+             isValidDateString(data.joinedDate) &&
+             data.status in ['Active', 'Inactive'] &&
+             data.batch in ['Morning Batch 1', 'Morning Batch 2', 'Evening Batch 1', 'Evening Batch 2', 'Weekend'] &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() < 2000)) &&
+             (!('jerseyNumber' in data) || (data.jerseyNumber is string && data.jerseyNumber.size() <= 5));
+    }
+
+    function isValidTeamReport(data) {
+      return data.keys().hasOnly(['academyName', 'academyAddress', 'academyContact', 'coachName', 'presidentName', 'secretaryName', 'players', 'createdAt']) &&
+             data.academyName is string && data.academyName.size() > 0 &&
+             data.academyAddress is string && data.academyAddress.size() > 0 &&
+             data.academyContact is string && data.academyContact.size() > 0 &&
+             data.coachName is string && data.coachName.size() > 0 &&
+             data.presidentName is string && data.presidentName.size() > 0 &&
+             data.secretaryName is string && data.secretaryName.size() > 0 &&
+             data.players is list && data.players.size() >= 5 && data.players.size() <= 12 &&
+             data.createdAt is string;
+    }
+
+    function isValidFee(data) {
+      return data.keys().hasOnly(['studentId', 'amount', 'date', 'month', 'year', 'status']) &&
+             data.studentId is string &&
+             data.amount is number && data.amount >= 0 &&
+             isValidDateString(data.date) &&
+             data.month is string &&
+             data.year is number &&
+             data.status in ['Paid', 'Pending'];
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasOnly(['studentId', 'date', 'status']) &&
+             data.studentId is string &&
+             isValidDateString(data.date) &&
+             data.status in ['Present', 'Absent'];
+    }
+
+    function isValidActivity(data) {
+      return data.keys().hasOnly(['title', 'description', 'date']) &&
+             data.title is string && data.title.size() > 0 &&
+             data.description is string && data.description.size() > 0 &&
+             data.date is string;
+    }
+
+    function isValidSchedule(data) {
+      return data.keys().hasOnly(['day', 'title', 'time']) &&
+             data.day is string && data.day.size() > 0 &&
+             data.title is string && data.title.size() > 0 &&
+             data.time is string && data.time.size() > 0;
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+    match /users/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (request.resource.data.role == 'coach' || isAdmin());
+      allow update: if isAuthenticated() && (request.auth.uid == uid || isAdmin()) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /students/{studentId} {
+      allow read: if isCoach();
+      allow create, update: if isAdmin() && isValidStudent(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /fees/{feeId} {
+      allow read: if isCoach();
+      allow create, update: if isAdmin() && isValidFee(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /attendance/{attendanceId} {
+      allow read: if isCoach();
+      allow create, update: if isCoach() && isValidAttendance(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /team-reports/{reportId} {
+      allow read: if isCoach();
+      allow create, update: if isCoach() && isValidTeamReport(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /activities/{activityId} {
+      allow read: if isCoach();
+      allow create, update: if isAdmin() && isValidActivity(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /schedules/{scheduleId} {
+      allow read: if isCoach();
+      allow create, update: if isAdmin() && isValidSchedule(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}
